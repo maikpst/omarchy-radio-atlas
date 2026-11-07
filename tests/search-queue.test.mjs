@@ -22,6 +22,7 @@ function session() {
     worldStationLimit: 5000,
     worldStations: [{ uuid: "cached-jazz", name: "Jazz" }],
     countryNames: {},
+    stateNames: {},
     countries: [],
     browsedCountryCode: "",
     countryCacheLoaded: false,

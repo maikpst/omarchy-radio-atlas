@@ -321,59 +321,162 @@ fetch_world() {
   cat "$world_cache_file"
 }
 
+# Plans the Radio Browser requests for a search: one line per request with
+# tab-separated key=value filters. Country, state and language names (also in
+# German, accents ignored) become exact filters; "jazz bayern" combines them.
+plan_search() {
+  python3 -I - "$script_dir/assets" "$1" <<'PY'
+import json
+import os
+import sys
+import unicodedata
+
+assets, query = sys.argv[1], sys.argv[2]
+
+
+def load(name):
+    try:
+        with open(os.path.join(assets, name)) as source:
+            data = json.load(source)
+        return data if isinstance(data, dict) else {}
+    except Exception as error:  # Lookups are optional; plain search still works.
+        print(f"{name} could not be loaded: {error}", file=sys.stderr)
+        return {}
+
+
+def fold(text):
+    text = unicodedata.normalize("NFKD", str(text).lower().replace("ß", "ss"))
+    return " ".join("".join(c for c in text if not unicodedata.combining(c)).split())
+
+
+countries = load("country-search.json")
+states = load("state-search.json")
+languages = load("language-search.json")
+query = " ".join(query.split())
+raw = query.lower()
+folded = fold(query)
+plans = []
+specific = []
+
+
+def add(*filters):
+    line = "\t".join(f"{key}={value}" for key, value in filters)
+    target = specific if len(filters) > 1 or filters[0][0] == "state" else plans
+    if line not in plans and line not in specific:
+        target.append(line)
+
+
+def country_of(text):
+    code = countries.get(text)
+    return code if isinstance(code, str) else ""
+
+
+def state_of(text):
+    entry = states.get(text)
+    if isinstance(entry, list) and len(entry) >= 2:
+        return str(entry[0]), [str(name) for name in entry[1:3]]
+    return None
+
+
+add(("name", query))
+add(("tag", query))
+code = country_of(raw) or country_of(folded)
+add(("countrycode", code) if code else ("country", query))
+language = languages.get(folded, "")
+if language:
+    add(("language", language))
+
+state = None if code else state_of(folded)
+if state:
+    for spelling in state[1]:
+        add(("state", spelling), ("countrycode", state[0]))
+
+words = folded.split(" ")
+if not code and not state and len(words) > 1:
+    found = None
+    for size in range(len(words) - 1, 0, -1):
+        for start in range(0, len(words) - size + 1):
+            phrase = " ".join(words[start:start + size])
+            match_code = country_of(phrase) if len(phrase) >= 2 else ""
+            if match_code and len(phrase) == 2 and 0 < start and start + size < len(words):
+                match_code = ""
+            match_state = None if match_code or len(phrase) < 3 else state_of(phrase)
+            if match_code or match_state:
+                found = (match_code, match_state, words[:start] + words[start + size:])
+                break
+        if found:
+            break
+    if found:
+        match_code, match_state, rest = found
+        text = " ".join(rest)
+        if match_code:
+            add(("name", text), ("countrycode", match_code))
+            add(("tag", text), ("countrycode", match_code))
+        else:
+            for spelling in match_state[1]:
+                add(("tag", text), ("state", spelling), ("countrycode", match_state[0]))
+            add(("name", text), ("countrycode", match_state[0]))
+
+# Combined filters first: they are the most precise and survive truncation.
+print("\n".join(specific + plans))
+PY
+}
+
+search_request() {
+  local filter
+  local -a filters arguments=()
+  IFS=$'\t' read -r -a filters <<< "$1"
+  for filter in "${filters[@]}"; do
+    arguments+=(--data-urlencode "$filter")
+  done
+  request 80 '/json/stations/search' \
+    "${arguments[@]}" \
+    --data-urlencode 'hidebroken=true' \
+    --data-urlencode 'order=clickcount' \
+    --data-urlencode 'reverse=true' \
+    --data-urlencode 'limit=80'
+}
+
 fetch_search() {
   local query=$1
-  local country_code country_filter
-  country_code=$(python3 - "$script_dir/assets/country-search.json" "$query" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1]) as source:
-    countries = json.load(source)
-print(countries.get(sys.argv[2].strip().lower(), ""))
-PY
-  ) || country_code=""
-  country_filter="country=$query"
-  [[ -z $country_code ]] || country_filter="countrycode=$country_code"
+  local plans
+  plans=$(plan_search "$query") || plans=""
+  if [[ -z $plans ]]; then
+    plans=$(printf 'name=%s\ntag=%s\ncountry=%s' "$query" "$query" "$query")
+  fi
   load_bases
   search_dir=$(mktemp -d "$runtime_dir/search.XXXXXX")
 
-  request 80 '/json/stations/search' \
-    --data-urlencode "name=$query" \
-    --data-urlencode 'hidebroken=true' \
-    --data-urlencode 'order=clickcount' \
-    --data-urlencode 'reverse=true' \
-    --data-urlencode 'limit=80' > "$search_dir/name.json" &
-  local name_pid=$!
+  local pids=() lines=() index=0 line
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    lines+=("$line")
+    search_request "$line" > "$search_dir/$index.json" &
+    pids+=("$!")
+    index=$(( index + 1 ))
+  done <<< "$plans"
 
-  request 80 '/json/stations/search' \
-    --data-urlencode "$country_filter" \
-    --data-urlencode 'hidebroken=true' \
-    --data-urlencode 'order=clickcount' \
-    --data-urlencode 'reverse=true' \
-    --data-urlencode 'limit=80' > "$search_dir/country.json" &
-  local country_pid=$!
-
-  request 80 '/json/stations/search' \
-    --data-urlencode "tag=$query" \
-    --data-urlencode 'hidebroken=true' \
-    --data-urlencode 'order=clickcount' \
-    --data-urlencode 'reverse=true' \
-    --data-urlencode 'limit=80' > "$search_dir/tag.json" &
-  local tag_pid=$!
-
-  local failed=0 pid
-  for pid in "$name_pid" "$country_pid" "$tag_pid"; do
-    if ! wait "$pid"; then failed=1; fi
+  # Mirrors occasionally drop one of several parallel connections; retry a
+  # failed request once on its own before giving up on the whole search.
+  local failed=0
+  for (( i = 0; i < index; i++ )); do
+    wait "${pids[$i]}" && continue
+    search_request "${lines[$i]}" > "$search_dir/$i.json" || failed=1
   done
 
   if (( failed )); then
     rm -rf "$search_dir"
+    search_dir=""
     echo 'Station service is unavailable' >&2
     return 1
   fi
 
-  jq -s 'add' "$search_dir/name.json" "$search_dir/country.json" "$search_dir/tag.json" \
+  local files=()
+  for (( i = 0; i < index; i++ )); do files+=("$search_dir/$i.json"); done
+  jq -s 'add | reduce .[] as $station ({seen: {}, rows: []};
+      ($station.stationuuid // "") as $id
+      | if $id != "" and .seen[$id] then .
+        else .seen[$id] = true | .rows += [$station] end) | .rows' "${files[@]}" \
     | store_results "$results_file"
   rm -rf "$search_dir"
   search_dir=""

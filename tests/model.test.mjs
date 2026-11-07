@@ -384,3 +384,29 @@ assert.deepEqual(Array.from(model.stationWindow([
 ], "too-large", 500)), [])
 
 console.log("RadioModel tests passed")
+
+// Search: accents, German names, several words, state filters and ranking.
+{
+  const countryNames = JSON.parse(fs.readFileSync(path.join(testDir, "..", "assets", "country-search.json"), "utf8"))
+  const stateNames = JSON.parse(fs.readFileSync(path.join(testDir, "..", "assets", "state-search.json"), "utf8"))
+  const rows = [
+    { uuid: "bayern-jazz", name: "Jazz Loft", countryCode: "DE", country: "Germany", state: "Bavaria", tags: "jazz,lounge", votes: 10 },
+    { uuid: "bayern-pop", name: "Antenne Bayern", countryCode: "DE", country: "Germany", state: "", tags: "pop", votes: 900 },
+    { uuid: "berlin-jazz", name: "Jazz Radio Berlin", countryCode: "DE", country: "Germany", state: "Berlin", tags: "jazz", votes: 500 },
+    { uuid: "wien-rock", name: "Rock Antenne Österreich", countryCode: "AT", country: "Austria", state: "Wien", tags: "rock", votes: 50 },
+    { uuid: "jazz-exact", name: "Jazz", countryCode: "US", country: "United States", state: "", tags: "", votes: 0 },
+  ]
+  const ids = (query) => Array.from(model.searchStations(rows, query, 50, countryNames, stateNames), row => row.uuid)
+  assert.equal(model.foldText("  ÖSTERREICH  Straße "), "osterreich strasse")
+  assert.deepEqual(ids("jazz bayern"), ["bayern-jazz"])
+  assert.deepEqual(ids("Bayern").sort(), ["bayern-jazz", "bayern-pop"])
+  assert.deepEqual(ids("antenne bayern"), ["bayern-pop"])
+  assert.deepEqual(ids("österreich rock"), ["wien-rock"])
+  assert.deepEqual(ids("osterreich"), ["wien-rock"])
+  assert.deepEqual(ids("rock oesterreich"), [])
+  assert.deepEqual(ids("deutschland jazz").sort(), ["bayern-jazz", "berlin-jazz"])
+  assert.deepEqual(ids("jazz berlin"), ["berlin-jazz"])
+  assert.equal(ids("jazz")[0], "jazz-exact", "An exact name match ranks first")
+  assert.deepEqual(Array.from(model.parseSearchQuery("north jazz", countryNames, stateNames).terms), ["north", "jazz"],
+    "Ambiguous region names are not treated as filters")
+}

@@ -77,6 +77,7 @@ Favorites, listening history, volume, and the selected audio output remain in
 | `F` | Favorite selected station |
 | `+` / `-` | Raise or lower radio volume |
 | `M` | Mute or unmute |
+| `L` | Show or hide map labels |
 | Speaker icon | Choose the audio output |
 | Tab / Shift+Tab, then Enter or Space | Navigate and activate controls, including World / Favorites / Recent |
 | `?` | Show or hide controls |
@@ -97,10 +98,17 @@ in the shell log. Open Radio Atlas again to retry.
 
 Stop also cancels pending random tuning, including before playback starts.
 
-Search accepts country names, two-letter country codes, and aliases such as
-`USA` and `UK`. Recognized countries match by code while station-name and tag
-searches still run. Other queries retain country-name substring matching.
-The bundled country lookup also works in the instant local preview.
+Search accepts country names (also German ones such as `Österreich`),
+two-letter country codes, aliases such as `USA` and `UK`, and state or province
+names (`Bayern` also finds stations tagged `Bavaria`). Accents and case are
+ignored, every word must match, and a country or state inside a longer query
+acts as a filter: `jazz bayern` lists jazz stations in Bavaria. German language
+names such as `deutsch` search by station language. Results are ranked by
+relevance (exact and leading name matches first), then popularity. The instant
+local preview and the online results use the same matching.
+
+The globe outlines countries and, when zoomed in, states and provinces; both
+are labeled in German. `L` hides or shows the labels.
 If any directory search request fails, cached matches remain visible with a
 service-unavailable warning.
 Stations with an empty resolved stream address use their original stream URL.

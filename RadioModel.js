@@ -511,38 +511,191 @@ function prioritizeStations(priority, fallback, maximum) {
   return combineStations([priority, fallback], maximum, false)
 }
 
-function searchStations(stations, query, maximum, countryNames) {
-  var rows = Array.isArray(stations) ? stations : []
-  var wanted = String(query || "").trim().toLowerCase()
-  if (!wanted) return []
-  var resolvedCountry = countryNames && countryNames[wanted]
-  var countryCode = typeof resolvedCountry === "string" ? resolvedCountry : ""
+// Lowercase, strip accents and collapse whitespace so "Österreich",
+// "osterreich" and "OSTERREICH" compare equal.
+function foldText(value) {
+  var text = String(value === null || value === undefined ? "" : value).toLowerCase()
+  text = text.replace(/ß/g, "ss")
+  try {
+    text = text.normalize("NFKD").replace(/[̀-ͯ]/g, "")
+  } catch (error) {
+    // Older engines without String.prototype.normalize keep the accents.
+  }
+  return text.replace(/\s+/g, " ").trim()
+}
 
-  var output = []
-  var limit = Math.max(1, Number(maximum || 150))
-  for (var i = 0; i < rows.length && output.length < limit; i++) {
-    var station = rows[i]
-    if (!station) continue
-    if (countryCode && String(station.countryCode || "").toUpperCase() === countryCode) {
-      output.push(station)
-      continue
-    }
-    var fields = [
-      station.name,
-      countryCode ? "" : station.country,
-      countryCode ? "" : station.countryCode,
-      station.state,
-      station.language,
-      station.tags,
-      station.codec
-    ]
-    for (var fieldIndex = 0; fieldIndex < fields.length; fieldIndex++) {
-      if (String(fields[fieldIndex] || "").toLowerCase().indexOf(wanted) < 0) continue
-      output.push(station)
-      break
+function lookupCountry(countryNames, text) {
+  if (!countryNames || !text) return ""
+  var code = countryNames[text]
+  return typeof code === "string" ? code : ""
+}
+
+function lookupState(stateNames, text) {
+  if (!stateNames || !text) return null
+  var entry = stateNames[text]
+  if (!Array.isArray(entry) || entry.length < 2) return null
+  var spellings = []
+  for (var i = 1; i < entry.length; i++) {
+    var folded = foldText(entry[i])
+    if (folded && spellings.indexOf(folded) < 0) spellings.push(folded)
+  }
+  return { code: String(entry[0] || "").toUpperCase(), spellings: spellings }
+}
+
+// Splits a query into free text and an optional country or state filter,
+// e.g. "jazz bayern" -> terms ["jazz"], state Bayern/Bavaria.
+function parseSearchQuery(query, countryNames, stateNames) {
+  var raw = String(query || "").trim().toLowerCase()
+  var folded = foldText(query)
+  var parsed = { text: folded, terms: [], countryCode: "", state: null, whole: false, filterText: "" }
+  if (!folded) return parsed
+
+  parsed.countryCode = lookupCountry(countryNames, raw) || lookupCountry(countryNames, folded)
+  if (!parsed.countryCode) parsed.state = lookupState(stateNames, folded)
+  if (parsed.countryCode || parsed.state) {
+    parsed.whole = true
+    return parsed
+  }
+
+  var words = folded.split(" ")
+  if (words.length > 1) {
+    // Longest run of words that names a country or a state wins.
+    for (var size = words.length - 1; size >= 1; size--) {
+      for (var start = 0; start + size <= words.length; start++) {
+        var phrase = words.slice(start, start + size).join(" ")
+        var code = phrase.length >= 2 ? lookupCountry(countryNames, phrase) : ""
+        var state = !code && phrase.length >= 3 ? lookupState(stateNames, phrase) : null
+        // Two-letter country codes ("de", "us") only count as filters at the
+        // edges of a query, where they are unlikely to be part of a name.
+        if (code && phrase.length === 2 && start !== 0 && start + size !== words.length) code = ""
+        if (!code && !state) continue
+        parsed.countryCode = code
+        parsed.state = state
+        parsed.filterText = phrase
+        parsed.terms = words.slice(0, start).concat(words.slice(start + size))
+        return parsed
+      }
     }
   }
+  parsed.terms = words
+  return parsed
+}
+
+function stationMatchesState(station, state) {
+  if (!state) return false
+  var code = String(station.countryCode || "").toUpperCase()
+  if (code && state.code && code !== state.code) return false
+  var value = foldText(station.state)
+  if (!value) return false
+  for (var i = 0; i < state.spellings.length; i++)
+    if (value.indexOf(state.spellings[i]) >= 0) return true
+  return false
+}
+
+function wordStart(haystack, needle) {
+  var index = haystack.indexOf(needle)
+  while (index >= 0) {
+    if (index === 0 || !/[a-z0-9]/.test(haystack.charAt(index - 1))) return true
+    index = haystack.indexOf(needle, index + 1)
+  }
+  return false
+}
+
+// Returns a relevance score, or -1 when the station does not match.
+function scoreStation(station, parsed) {
+  if (!station) return -1
+  var name = foldText(station.name)
+  var tags = foldText(String(station.tags || "").replace(/,/g, " , "))
+  var fields = {
+    name: name,
+    tags: tags,
+    state: foldText(station.state),
+    language: foldText(station.language),
+    country: parsed.countryCode ? "" : foldText(station.country) + " " + foldText(station.countryCode),
+    codec: foldText(station.codec)
+  }
+  var score = 0
+
+  if (parsed.whole) {
+    // A bare country or state name: stations located there, plus stations
+    // that mention the name elsewhere ("USA Radio" in Germany).
+    var located = parsed.countryCode
+      ? String(station.countryCode || "").toUpperCase() === parsed.countryCode
+      : stationMatchesState(station, parsed.state)
+    var mentioned = false
+    var mentionFields = ["name", "tags", "state", "language", "codec"]
+    for (var m = 0; m < mentionFields.length && !mentioned; m++)
+      mentioned = fields[mentionFields[m]].indexOf(parsed.text) >= 0
+    if (!located && !mentioned) return -1
+    score += located ? 40 : 0
+    if (mentioned) score += wordStart(name, parsed.text) ? 30 : 15
+  } else {
+    if (parsed.countryCode || parsed.state) {
+      var inside = parsed.countryCode
+        ? String(station.countryCode || "").toUpperCase() === parsed.countryCode
+        : stationMatchesState(station, parsed.state)
+      // "Antenne Bayern" without state metadata still matches by name.
+      if (inside) score += 20
+      else if (wordStart(name, parsed.filterText) || tags.indexOf(parsed.filterText) >= 0) score += 12
+      else return -1
+    }
+
+    var terms = parsed.terms
+    for (var t = 0; t < terms.length; t++) {
+      var term = terms[t]
+      var termScore = 0
+      if (name.indexOf(term) >= 0) termScore = wordStart(name, term) ? 14 : 9
+      if (tags.indexOf(term) >= 0)
+        termScore = Math.max(termScore, wordStart(tags, term) ? 11 : 6)
+      if (fields.language.indexOf(term) >= 0) termScore = Math.max(termScore, 7)
+      if (fields.state.indexOf(term) >= 0) termScore = Math.max(termScore, 7)
+      if (fields.country.indexOf(term) >= 0) termScore = Math.max(termScore, 5)
+      if (fields.codec.indexOf(term) >= 0) termScore = Math.max(termScore, 2)
+      if (termScore === 0) return -1
+      score += termScore
+    }
+
+    var phrase = terms.join(" ")
+    if (phrase) {
+      if (name === phrase) score += 60
+      else if (name.indexOf(phrase) === 0) score += 35
+      else if (terms.length > 1 && name.indexOf(phrase) >= 0) score += 20
+      if (("," + tags.replace(/ , /g, ",") + ",").indexOf("," + phrase + ",") >= 0) score += 12
+    }
+  }
+
+  // Popular, working stations first among equally relevant ones.
+  var votes = Math.max(0, Number(station.votes) || 0)
+  var clicks = Math.max(0, Number(station.clicks) || 0)
+  score += Math.min(12, Math.log(1 + votes) * 1.1 + Math.log(1 + clicks) * 0.9)
+  return score
+}
+
+function rankStations(stations, query, maximum, countryNames, stateNames, keepUnmatched) {
+  var rows = Array.isArray(stations) ? stations : []
+  var parsed = parseSearchQuery(query, countryNames, stateNames)
+  if (!parsed.text) return []
+  var scored = []
+  for (var i = 0; i < rows.length; i++) {
+    var score = scoreStation(rows[i], parsed)
+    if (score < 0) {
+      if (!keepUnmatched || !rows[i]) continue
+      score = -1000
+    }
+    scored.push({ station: rows[i], score: score, order: i })
+  }
+  scored.sort(function(first, second) {
+    return second.score - first.score || first.order - second.order
+  })
+  var limit = Math.max(1, Number(maximum || 150))
+  var output = []
+  for (var j = 0; j < scored.length && output.length < limit; j++)
+    output.push(scored[j].station)
   return output
+}
+
+function searchStations(stations, query, maximum, countryNames, stateNames) {
+  return rankStations(stations, query, maximum, countryNames, stateNames, false)
 }
 
 function stationsForCountry(stations, code, maximum) {

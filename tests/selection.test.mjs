@@ -116,6 +116,7 @@ function refreshSession(mode) {
     ListView: { Contain: 0 },
     stationList: { currentIndex: -1, positionViewAtIndex() {} },
     countryNames: {},
+    stateNames: {},
     restorePlayingCountry() {},
     startFetch(action, query) { requestedQuery = query },
     scheduleWorldExpansion() {},

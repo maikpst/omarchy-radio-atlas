@@ -18,6 +18,16 @@ Item {
 
   property bool opened: false
   property var countries: []
+  property var mapStates: []
+  property bool mapStatesRequested: false
+  readonly property var stateNames: {
+    try {
+      return JSON.parse(stateNamesFile.text() || "{}")
+    } catch (error) {
+      console.warn("State names could not be loaded:", error)
+      return ({})
+    }
+  }
   readonly property var countryNames: {
     try {
       return JSON.parse(countryNamesFile.text() || "{}")
@@ -192,6 +202,7 @@ Item {
         { input: "R", action: "Tune randomly" },
         { input: "F", action: "Favorite selected station" },
         { input: "M", action: "Mute or unmute" },
+        { input: "L", action: "Show or hide map labels" },
         { input: "+ / -", action: "Change volume" },
         { input: "ESC", action: "Back, clear, or close" },
         { input: "?", action: "Show or hide controls" }
@@ -449,7 +460,8 @@ Item {
     }
     restorePlayingCountry(false)
     fetchError = ""
-    setStationList("search", RadioModel.searchStations(worldStations, query, 150, countryNames))
+    setStationList("search", RadioModel.searchStations(
+      worldStations, query, 150, countryNames, stateNames))
     return true
   }
 
@@ -928,6 +940,30 @@ Item {
     }
   }
 
+  // Admin-1 borders are large; load them the first time the globe zooms in.
+  FileView {
+    path: root.mapStatesRequested
+      ? Qt.resolvedUrl("assets/states.json").toString().replace(/^file:\/\//, "") : ""
+    watchChanges: false
+    printErrors: true
+    onLoaded: {
+      try {
+        var collection = JSON.parse(text())
+        root.mapStates = Array.isArray(collection.features) ? collection.features : []
+      } catch (error) {
+        root.mapStates = []
+      }
+    }
+  }
+
+  FileView {
+    id: stateNamesFile
+    path: Qt.resolvedUrl("assets/state-search.json").toString().replace(/^file:\/\//, "")
+    blockLoading: true
+    watchChanges: false
+    printErrors: true
+  }
+
   FileView {
     id: countryNamesFile
     path: decodeURIComponent(Qt.resolvedUrl("assets/country-search.json").toString().replace(/^file:\/\//, ""))
@@ -1147,7 +1183,11 @@ Item {
           root.applyCountryStations(root.fetchValue, stations)
         countryCacheFile.reload()
       } else if (root.fetchAction === "search") {
-        root.setStationList("search", stations, true)
+        // Same matching and relevance order as the instant preview. Should
+        // the matcher reject everything the service found, show it unranked.
+        var ranked = RadioModel.searchStations(
+          stations, root.fetchValue, 500, root.countryNames, root.stateNames)
+        root.setStationList("search", ranked.length > 0 ? ranked : stations, true)
       } else if (root.fetchAction === "random") {
         root.setStationList("random", stations)
         if (stations.length > 0 && playRandom) {
@@ -1583,6 +1623,9 @@ Item {
         } else if (event.key === Qt.Key_F && root.selectedStation) {
           root.toggleFavorite(root.selectedStation.uuid)
           event.accepted = true
+        } else if (event.key === Qt.Key_L) {
+          globe.showLabels = !globe.showLabels
+          event.accepted = true
         }
       }
 
@@ -1629,7 +1672,7 @@ Item {
           anchors.rightMargin: Style.spacing.sm
           anchors.verticalCenter: parent.verticalCenter
           width: Math.min(Style.space(330), card.width * 0.32)
-          placeholderText: "Search station, country, or genre"
+          placeholderText: "Station, genre, country or state"
           maximumLength: 128
           foreground: root.foreground
           accent: root.accent
@@ -1718,6 +1761,8 @@ Item {
             // Equal inset on all sides so the globe doesn't merge with the window border.
             anchors.margins: root.edgeInset
             countries: root.countries
+            states: root.mapStates
+            onWantsStatesChanged: if (wantsStates) root.mapStatesRequested = true
             stations: root.currentGeoStations
             selectedStation: root.playingStation || root.selectedStation
             activeCountryCode: root.activeCountryCode

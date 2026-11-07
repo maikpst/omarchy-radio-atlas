@@ -192,14 +192,10 @@ sed -n '/function handleHyprlandEvent/,/^  }/p' "$project_dir/RadioAtlas.qml" \
   | rg -Fq 'dismiss()'
 assert_no_match 'resizewindowpixel|centerwindow|hl\.dsp\.window\.(float|resize|center|set_prop)' \
   "$project_dir/RadioAtlas.qml"
-rg -Fq 'hl.window_rule({' "$project_dir/radio-window"
-rg -Fq 'initial_class = "^org[.]quickshell$"' "$project_dir/radio-window"
-rg -Fq 'initial_title = "^Radio Atlas$"' "$project_dir/radio-window"
-rg -Fq 'float = true' "$project_dir/radio-window"
-rg -Fq 'center = true' "$project_dir/radio-window"
-rg -Fq 'size = { $width, $height }' "$project_dir/radio-window"
-rg -Fq 'no_anim = true' "$project_dir/radio-window"
-rg -Fq 'border_size = 0' "$project_dir/radio-window"
+# Fork: the window stays tiled. radio-window only removes the runtime float
+# rule that older versions registered, it never adds one.
+rg -Fq '_G.omarchy_radio_atlas_window_rule:set_enabled(false)' "$project_dir/radio-window"
+assert_no_match 'hl\.window_rule\(' "$project_dir/radio-window"
 rg -Fq 'HyprlandWindow.opacity: root.windowFrameReady ? 1 : 0' "$project_dir/RadioAtlas.qml"
 sed -n '/function scheduleWindowReveal/,/^  }/p' "$project_dir/RadioAtlas.qml" \
   | rg -Fq 'windowRevealTimer.restart()'

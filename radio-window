@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Upstream legt beim Öffnen eine benannte Float-Regel mit fester Größe an.
+# Die wird nach den statischen Regeln registriert und überschreibt sie.
+# Hier nur abschalten: das Fenster bleibt gekachelt und füllt die Arbeitsfläche.
 set -euo pipefail
 
 width=${1:-}
@@ -11,7 +14,7 @@ height=${2:-}
 
 [[ $(hyprctl -j status | jq -r '.configProvider // ""') == lua ]] || exit 2
 
-read -r -d '' setup <<LUA || true
+read -r -d '' setup <<'LUA' || true
 if _G.omarchy_radio_atlas_window_handler then
   _G.omarchy_radio_atlas_window_handler:remove()
   _G.omarchy_radio_atlas_window_handler = nil
@@ -19,20 +22,8 @@ end
 
 if _G.omarchy_radio_atlas_window_rule then
   _G.omarchy_radio_atlas_window_rule:set_enabled(false)
+  _G.omarchy_radio_atlas_window_rule = nil
 end
-
-_G.omarchy_radio_atlas_window_rule = hl.window_rule({
-  name = "radio-atlas-plugin",
-  match = {
-    initial_class = "^org[.]quickshell$",
-    initial_title = "^Radio Atlas$",
-  },
-  float = true,
-  center = true,
-  size = { $width, $height },
-  no_anim = true,
-  border_size = 0,
-})
 LUA
 
 response=$(hyprctl eval "$setup")

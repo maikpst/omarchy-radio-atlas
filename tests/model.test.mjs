@@ -155,6 +155,19 @@ assert.ok(canada.latitude > 40 && canada.latitude < 65)
 assert.ok(canada.longitude > -140 && canada.longitude < -50)
 assert.equal(model.countryCentre(countries, "XX"), null)
 
+// Choosing a country also lights up stations just across its borders.
+const around = model.stationsAroundCountry([
+  { uuid: "berlin", countryCode: "DE", latitude: 52.5, longitude: 13.4 },
+  { uuid: "vienna", countryCode: "AT", latitude: 48.2, longitude: 16.4 },
+  { uuid: "madrid", countryCode: "ES", latitude: 40.4, longitude: -3.7 },
+  { uuid: "no-location", countryCode: "DE", latitude: null, longitude: null },
+  { uuid: "amsterdam", countryCode: "NL", latitude: 52.4, longitude: 4.9 }
+], countries, "de")
+assert.deepEqual(Array.from(around, station => station.uuid), ["vienna", "amsterdam", "berlin", "no-location"])
+const franceBounds = model.countryBounds(countries, "FR")
+assert.ok(franceBounds.west > -6 && franceBounds.east < 10, "overseas territories stay out of the bounds")
+assert.deepEqual(Array.from(model.stationsAroundCountry([], countries, ""), station => station.uuid), [])
+
 const stations = [
   { uuid: "a", latitude: 0, longitude: 0 },
   { uuid: "b", latitude: 0, longitude: 180 }

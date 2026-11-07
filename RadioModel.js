@@ -698,6 +698,89 @@ function searchStations(stations, query, maximum, countryNames, stateNames) {
   return rankStations(stations, query, maximum, countryNames, stateNames, false)
 }
 
+// Bounding box of a country's largest polygon (its mainland), so overseas
+// territories do not stretch it around the globe.
+function countryBounds(features, code) {
+  var rows = Array.isArray(features) ? features : []
+  var wanted = String(code || "").toUpperCase()
+  for (var i = 0; i < rows.length; i++) {
+    var feature = rows[i]
+    if (!feature || !feature.geometry || !feature.properties) continue
+    if (String(feature.properties.code || "").toUpperCase() !== wanted) continue
+    var geometry = feature.geometry
+    var polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates
+    if (!Array.isArray(polygons)) return null
+    var best = null
+    for (var p = 0; p < polygons.length; p++) {
+      var ring = polygons[p] && polygons[p][0]
+      if (!Array.isArray(ring) || ring.length < 3) continue
+      var box = null
+      var previous = 0
+      for (var n = 0; n < ring.length; n++) {
+        var longitude = Number(ring[n][0])
+        var latitude = Number(ring[n][1])
+        if (!isFinite(longitude) || !isFinite(latitude)) continue
+        if (box) {
+          while (longitude - previous > 180) longitude -= 360
+          while (longitude - previous < -180) longitude += 360
+        }
+        previous = longitude
+        if (!box) box = { south: latitude, north: latitude, west: longitude, east: longitude }
+        box.south = Math.min(box.south, latitude)
+        box.north = Math.max(box.north, latitude)
+        box.west = Math.min(box.west, longitude)
+        box.east = Math.max(box.east, longitude)
+      }
+      if (!box) continue
+      box.size = (box.north - box.south) * (box.east - box.west)
+      if (!best || box.size > best.size) best = box
+    }
+    return best
+  }
+  return null
+}
+
+// Stations of the chosen country plus those in a margin around it, so the
+// neighbourhood lights up too. Neighbours come first so the chosen
+// country's own dots are drawn on top.
+function stationsAroundCountry(stations, features, code, maximum) {
+  var rows = Array.isArray(stations) ? stations : []
+  var wanted = String(code || "").toUpperCase()
+  if (!wanted) return []
+  var limit = Math.max(1, Number(maximum || 5500))
+  var own = []
+  var nearby = []
+  var box = countryBounds(features, wanted)
+  var centreLatitude = 0, centreLongitude = 0, halfLatitude = -1, halfLongitude = -1
+  if (box && box.east - box.west < 120) {
+    var span = Math.max(box.north - box.south, box.east - box.west)
+    var margin = clamp(span * 0.35, 2, 8)
+    centreLatitude = (box.north + box.south) / 2
+    centreLongitude = (box.east + box.west) / 2
+    halfLatitude = (box.north - box.south) / 2 + margin
+    halfLongitude = (box.east - box.west) / 2
+      + margin / Math.max(0.3, Math.cos(centreLatitude * Math.PI / 180))
+  }
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i]
+    if (!row) continue
+    if (String(row.countryCode || "").toUpperCase() === wanted) {
+      own.push(row)
+      continue
+    }
+    if (halfLatitude < 0 || row.latitude === null || row.longitude === null) continue
+    var latitude = Number(row.latitude)
+    var longitude = Number(row.longitude)
+    if (!isFinite(latitude) || !isFinite(longitude)) continue
+    if (Math.abs(latitude - centreLatitude) > halfLatitude) continue
+    var offset = ((longitude - centreLongitude) % 360 + 540) % 360 - 180
+    if (Math.abs(offset) > halfLongitude) continue
+    nearby.push(row)
+  }
+  own = own.slice(0, limit)
+  return nearby.slice(0, limit - own.length).concat(own)
+}
+
 function stationsForCountry(stations, code, maximum) {
   var rows = Array.isArray(stations) ? stations : []
   var wanted = String(code || "").toUpperCase()

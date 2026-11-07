@@ -124,16 +124,12 @@ Item {
     : (mode === "recent" ? recent : results)
   readonly property var currentGeoStations:
     RadioModel.mergeGeoStations(worldStations, displayStations, countries)
-  // The globe only lights up stations once a country is chosen (or for an
+  // The globe only lights up stations once a country is chosen (with its
+  // surroundings, dimmed) or for an
   // explicit list such as search results, favourites or history).
   readonly property var mapStations: {
-    if (activeCountryCode) {
-      var output = []
-      for (var i = 0; i < currentGeoStations.length; i++)
-        if (String(currentGeoStations[i].countryCode || "").toUpperCase() === activeCountryCode)
-          output.push(currentGeoStations[i])
-      return output
-    }
+    if (activeCountryCode)
+      return RadioModel.stationsAroundCountry(currentGeoStations, countries, activeCountryCode)
     if (mode === "search" || mode === "favorites" || mode === "recent")
       return RadioModel.mergeGeoStations(displayStations, [], countries)
     return []

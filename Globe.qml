@@ -440,6 +440,7 @@ Item {
       var cosLatitude = Math.cos(latitude)
       output.push({
         station: station,
+        countryCode: String(station.countryCode || "").toUpperCase(),
         worldX: cosLatitude * Math.cos(longitude),
         worldY: cosLatitude * Math.sin(longitude),
         worldZ: Math.sin(latitude),
@@ -890,6 +891,7 @@ Item {
     var activeColor = accentColor
     var selectedOutline = withAlpha(activeColor, 0.72)
     var highlightedOutline = withAlpha(activeColor, 0.92)
+    var focusCode = activeCountryCode.toUpperCase()
     ctx.fillStyle = markerColor
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i]
@@ -910,11 +912,13 @@ Item {
 
       var selected = selection && row.station.uuid === selection.uuid
       var highlighted = highlight && row.station.uuid === highlight.uuid && !selected
-      var markerRadius = selected ? 4.2 : (highlighted ? 3.7 : 1.7 + depth * 1.25)
+      // Stations around the chosen country are drawn smaller and dimmer.
+      var nearby = focusCode !== "" && row.countryCode !== focusCode
+      var markerRadius = selected ? 4.2 : (highlighted ? 3.7 : (1.7 + depth * 1.25) * (nearby ? 0.75 : 1))
       ctx.beginPath()
       ctx.arc(row.screenX, row.screenY, markerRadius, 0, Math.PI * 2)
       if (selected || highlighted) ctx.fillStyle = activeColor
-      ctx.globalAlpha = selected || highlighted ? 1 : 0.42 + depth * 0.48
+      ctx.globalAlpha = selected || highlighted ? 1 : (0.42 + depth * 0.48) * (nearby ? 0.4 : 1)
       ctx.fill()
 
       if (selected || highlighted) {

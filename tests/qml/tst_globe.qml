@@ -285,12 +285,16 @@ TestCase {
         set: style === "fillStyle" ? function(value) { styleChanges++; fillColor = value }
           : function(value) { styleChanges++ }
       })
-    item.paintCountries(context, 400, 300, item.radius())
+    // Fork: one path per country, the active country is filled last.
+    var view = item.viewState(400, 300, item.radius())
+    view.width = 800
+    view.height = 600
+    item.paintCountries(context, view)
     compare(fills.length, 100)
-    compare(styleChanges, 9)
-    verify(Qt.colorEqual(fills[0], item.withAlpha(item.landColor, 0.9)))
-    verify(Qt.colorEqual(fills[26], item.withAlpha(item.accentColor, 0.38)))
-    verify(Qt.colorEqual(fills[27], item.withAlpha(item.landColor, 0.9)))
+    compare(styleChanges, 2)
+    verify(Qt.colorEqual(fills[0], item.withAlpha(item.landColor, 0.92)))
+    verify(Qt.colorEqual(fills[98], item.withAlpha(item.landColor, 0.92)))
+    verify(Qt.colorEqual(fills[99], item.withAlpha(item.accentColor, 0.32)))
   }
 
   // Keep the original per-marker brush-alpha path as a pixel reference.

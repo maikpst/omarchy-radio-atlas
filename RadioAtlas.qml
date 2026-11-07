@@ -124,6 +124,20 @@ Item {
     : (mode === "recent" ? recent : results)
   readonly property var currentGeoStations:
     RadioModel.mergeGeoStations(worldStations, displayStations, countries)
+  // The globe only lights up stations once a country is chosen (or for an
+  // explicit list such as search results, favourites or history).
+  readonly property var mapStations: {
+    if (activeCountryCode) {
+      var output = []
+      for (var i = 0; i < currentGeoStations.length; i++)
+        if (String(currentGeoStations[i].countryCode || "").toUpperCase() === activeCountryCode)
+          output.push(currentGeoStations[i])
+      return output
+    }
+    if (mode === "search" || mode === "favorites" || mode === "recent")
+      return RadioModel.mergeGeoStations(displayStations, [], countries)
+    return []
+  }
   readonly property string playingStationName: playingStation
     ? RadioModel.cleanText(playingStation.name) : ""
   readonly property string playingTrackTitle: {
@@ -1763,7 +1777,7 @@ Item {
             countries: root.countries
             states: root.mapStates
             onWantsStatesChanged: if (wantsStates) root.mapStatesRequested = true
-            stations: root.currentGeoStations
+            stations: root.mapStations
             selectedStation: root.playingStation || root.selectedStation
             activeCountryCode: root.activeCountryCode
             backgroundColor: root.mapBackground
@@ -1907,7 +1921,9 @@ Item {
             anchors.rightMargin: root.overlaySideInset
             anchors.bottom: parent.bottom
             anchors.bottomMargin: root.overlayInset
-            text: root.currentGeoStations.length + " signals"
+            text: root.mapStations.length > 0 || root.activeCountryCode
+              ? root.mapStations.length + " signals"
+              : root.currentGeoStations.length + " signals · pick a country"
             textFormat: Text.PlainText
             color: root.dim
             font.family: Style.font.menuFamily

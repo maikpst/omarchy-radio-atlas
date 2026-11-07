@@ -50,6 +50,11 @@ Item {
   property var states: []
   property var preparedStates: []
   property bool showLabels: true
+  // While the globe moves, draw coarser outlines and skip label layout;
+  // one full-quality frame follows when the motion ends.
+  readonly property bool interacting: dragHandler.active || kineticAnimation.running
+    || zoomAnimation.running
+  onInteractingChanged: globeCanvas.requestPaint()
   // States and provinces fade in from this zoom level; labels a bit later.
   property real stateScale: 3.2
   property real stateLabelScale: 3.6
@@ -363,11 +368,24 @@ Item {
   }
 
   function prepareCountryGeometry() {
-    return prepareFeatureGeometry(countries, [0.45, 0.12])
+    return prepareFeatureGeometry(countries, countryTolerances)
   }
 
   // Admin-1 data is large: prepare it in slices so the UI never stalls.
   property var pendingStates: []
+  // Decimation steps (degrees) per level of detail, coarsest first.
+  readonly property var countryTolerances: [1.1, 0.45, 0.12]
+  readonly property var stateTolerances: [0.9, 0.3, 0.1]
+
+  // Finest level whose decimation step stays below `pixels` on screen
+  // (the last level is the full geometry).
+  function levelFor(tolerances, view) {
+    var pixelsPerDegree = view.radius * Math.PI / 180
+    var target = interacting ? 7 : 2.6
+    var level = 0
+    while (level < tolerances.length && tolerances[level] * pixelsPerDegree > target) level++
+    return level
+  }
   property int pendingStateIndex: 0
 
   function prepareStateGeometry() {
@@ -384,7 +402,7 @@ Item {
     onTriggered: {
       var rows = root.states
       var end = Math.min(rows.length, root.pendingStateIndex + 200)
-      root.prepareFeatureGeometry(rows, [0.3, 0.1], root.pendingStateIndex, end, root.pendingStates)
+      root.prepareFeatureGeometry(rows, root.stateTolerances, root.pendingStateIndex, end, root.pendingStates)
       root.pendingStateIndex = end
       if (end < rows.length) return
       running = false
@@ -482,7 +500,9 @@ Item {
       centreY: centreY,
       radius: globeRadius,
       // Squared pixel distance below which consecutive points are skipped.
-      minimumStep: 2.25,
+      minimumStep: interacting ? 20 : 4,
+      // Rings smaller than this (pixels across) are skipped.
+      minimumRing: interacting ? 3 : 1.2,
       width: globeCanvas.width,
       height: globeCanvas.height
     }
@@ -547,6 +567,7 @@ Item {
   function prepareRing(ring, lod, view) {
     ring.culled = true
     if (ringCulled(ring.cap, view)) return null
+    if (ring.cap.chord * view.radius < view.minimumRing) return null
     var level = null
     for (var l = lod; !level && l < ring.levels.length; l++) level = ring.levels[l]
     if (!projectLevel(level, view)) return null
@@ -672,7 +693,7 @@ Item {
 
   function paintCountries(ctx, view) {
     var rows = preparedCountries
-    var lod = globeScale < 2 ? 0 : (globeScale < 6 ? 1 : 2)
+    var lod = levelFor(countryTolerances, view)
     var activeCode = activeCountryCode.toUpperCase()
     var active = null
 
@@ -704,9 +725,10 @@ Item {
   }
 
   function paintBorders(ctx, rows, view, color, alpha, width, skipCode) {
-    ctx.lineJoin = "round"
+    // Thin bevelled strokes rasterize much faster while the globe moves.
+    ctx.lineJoin = interacting ? "bevel" : "round"
     ctx.strokeStyle = withAlpha(color, alpha)
-    ctx.lineWidth = width
+    ctx.lineWidth = interacting ? Math.min(width, 1.2) : width
     for (var i = 0; i < rows.length; i++) {
       var feature = rows[i]
       if (skipCode && feature.code === skipCode) continue
@@ -726,7 +748,9 @@ Item {
     if (!wantsStates || preparedStates.length === 0) return 0
     var fade = RadioModel.clamp((globeScale - stateScale) / (stateScale * 0.35), 0, 1)
     if (fade <= 0) return 0
-    var lod = globeScale < 5 ? 0 : (globeScale < 12 ? 1 : 2)
+    // State borders are detail for a resting globe; skip them in motion.
+    if (interacting) return fade
+    var lod = levelFor(stateTolerances, view)
     var rows = preparedStates
     for (var i = 0; i < rows.length; i++) {
       var state = rows[i]
@@ -950,7 +974,7 @@ Item {
       paintBorders(ctx, activeRows, view, accentColor, 0.95, borderWidth() + 0.6, "")
     }
     paintSignals(ctx)
-    updateLabels(view, stateFade)
+    if (!interacting) updateLabels(view, stateFade)
     ctx.restore()
 
     ctx.beginPath()
@@ -1092,7 +1116,7 @@ Item {
   Item {
     id: labelLayer
     anchors.fill: parent
-    visible: root.showLabels
+    visible: root.showLabels && !root.interacting
 
     Repeater {
       model: root.labelPoolSize
